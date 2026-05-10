@@ -5,6 +5,7 @@ description = "A framework for evaluating LLM robustness on verbal reasoning tas
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "httpx>=0.27",
     "openai>=1.30",
     "pydantic>=2.0",
 ]
