@@ -63,7 +63,7 @@ class Dataset:
 
 
 def load_dataset(
-    path: str,
+    path: str | Path,
     attack: AttackType | None = None,
 ) -> Dataset:
     """Load a dataset from a JSON file.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from .attacks import AttackType
 from .metrics import DatasetMetrics, RobustnessMetrics, compute_accuracy, compute_robustness
@@ -123,7 +124,7 @@ class BenchmarkResult:
                 if ds.attack is not None and ds._robustness is None:
                     ds.compute_robustness_against(baseline)
 
-    def save(self, path: str) -> None:
+    def save(self, path: str | Path) -> None:
         """Export benchmark results to file.
 
         File format is determined by extension:
@@ -133,16 +134,18 @@ class BenchmarkResult:
         Args:
             path: Output file path.
         """
+        path = Path(path)
         # Compute robustness lazily before saving
         self._compute_all_robustness()
 
-        if path.endswith(".json"):
-            self._save_json(path)
-        elif path.endswith((".md", ".txt")):
-            self._save_report(path)
+        suffix = path.suffix
+        if suffix == ".json":
+            self._save_json(str(path))
+        elif suffix in (".md", ".txt"):
+            self._save_report(str(path))
         else:
             # Default to JSON
-            self._save_json(path)
+            self._save_json(str(path))
 
     def _save_json(self, path: str) -> None:
         """Export as structured JSON."""

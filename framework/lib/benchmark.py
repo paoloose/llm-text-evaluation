@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .attacks import AttackType
 from .dataset import Dataset, load_dataset, validate_alignment
@@ -39,11 +40,11 @@ class Benchmark:
 
     def __init__(
         self,
-        baseline: str,
-        attacked: list[tuple[str, AttackType]] | None = None,
+        baseline: str | Path,
+        attacked: list[tuple[str | Path, AttackType]] | None = None,
         models: list[BaseProvider] | None = None,
         concurrency: int = 4,
-        partial_results_dir: str = ".partial",
+        partial_results_dir: str | Path = ".partial",
     ) -> None:
         self._concurrency = concurrency
         self._partial_dir = partial_results_dir

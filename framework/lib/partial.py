@@ -29,7 +29,7 @@ def _partial_filename(
 
 
 def load_partial_results(
-    partial_dir: str,
+    partial_dir: str | Path,
     dataset_filename: str,
     model_slug: str,
 ) -> list[EvaluatedSample]:
@@ -78,7 +78,7 @@ def load_partial_results(
 
 
 def save_partial_results(
-    partial_dir: str,
+    partial_dir: str | Path,
     dataset_filename: str,
     model_name: str,
     model_slug: str,
