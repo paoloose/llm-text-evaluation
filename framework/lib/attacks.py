@@ -165,7 +165,7 @@ class CrossLingual(AttackType):
             for attempt in range(provider.retry_times + 1):
                 start = time.perf_counter()
                 try:
-                    raw_response, _, _ = await provider.complete(
+                    raw_response, _, _, _ = await provider.complete(
                         messages, response_format
                     )
                 except Exception as exc:
@@ -196,7 +196,6 @@ class CrossLingual(AttackType):
                 batch_translated = []
                 failed: list[str] = []
                 for s in batch_samples:
-                    print(parsed, s)
                     new_q = parsed.get(s.id)
                     if new_q is None:
                         failed.append(f"sample {s.id}: missing from response")

@@ -100,7 +100,7 @@ async def generate_perturbed_dataset(
         existing.extend(new_samples)
         _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
 
-    source = f"{baseline.filename}.{attack.attack_name}.{label}.json"
+    source = f"{attack.attack_name}.{label}.json"
     ds = Dataset(samples=existing, source_file=source, attack=attack)
     validate_alignment(baseline, ds)
     logger.info("Perturbed dataset prepared and validated: %d samples", len(ds))
