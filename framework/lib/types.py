@@ -18,6 +18,13 @@ class TaskType(StrEnum):
     INCOMPLETE_SENTENCES = "incomplete_sentences"
 
 
+class CrossLingualLanguage(StrEnum):
+    """Supported target languages for cross-lingual perturbation."""
+
+    FRENCH = "french"
+    CHINESE = "chinese"
+
+
 @dataclass(frozen=True)
 class Sample:
     """A single evaluation sample from the dataset.

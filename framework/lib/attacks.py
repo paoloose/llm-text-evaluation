@@ -7,10 +7,20 @@ on-the-fly by implementing ``perturb()``.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .types import Sample
+from .prompt import build_translation_messages, parse_translation_response
+from .types import CrossLingualLanguage, Sample
+
+if TYPE_CHECKING:
+    from .providers.base import BaseProvider
+
+logger = logging.getLogger("llm_verbal_framework")
 
 
 @dataclass(frozen=True)
@@ -18,11 +28,13 @@ class AttackType:
     """Base class for attack/perturbation strategies.
 
     Attributes:
-        label: User-defined label for this specific attack variant, e.g. synonym_low_intensity.
+        label: User-defined label for this specific attack variant, e.g.
+            ``synonym_low_intensity``. When ``None`` the subclass is expected to
+            provide a sensible default via ``__post_init__``.
         load_from: Optional path to a pre-computed perturbed dataset file.
     """
 
-    label: str
+    label: str | None = field(default=None)
     load_from: str | Path | None = field(default=None)
 
     @property
@@ -61,11 +73,140 @@ class AttackType:
 
 @dataclass(frozen=True)
 class CrossLingual(AttackType):
-    """Cross-lingual perturbation: translating parts of the input to another language.
+    """Cross-lingual perturbation: translating questions and options to another language.
 
-    Examples: translate prompt, context, question, or mix languages.
+    Uses an LLM to translate the baseline dataset into the target language
+    while preserving sample IDs, answer indices, and option ordering.
+
+    When ``label`` is not provided it defaults to ``{language}_base``.
+
+    Args:
+        language: Target language for translation.
+        label: Unique identifier for this perturbation variant.
+            Defaults to ``{language.value}_base``.
+        load_from: Path to a pre-computed translated dataset file.
+            When set, ``perturb()`` is skipped.
+        model: Provider instance to use for translation. Defaults to
+            ``OpencodeGo("minimax-m2.5")`` with the API key read from the
+            ``OPENCODEGO_APIKEY`` environment variable.
     """
-    pass
+
+    language: "CrossLingualLanguage | None" = field(default=None)
+    model: "BaseProvider | None" = field(default=None, repr=False, compare=False, hash=False)
+
+    def __post_init__(self) -> None:
+        if self.language is None:
+            raise ValueError("CrossLingual requires a 'language' argument")
+        if self.label is None:
+            object.__setattr__(self, "label", f"{self.language.value}_base")
+
+    @property
+    def _translation_model(self) -> "BaseProvider":
+        if self.model is not None:
+            return self.model
+        from .providers.opencode_go import OpencodeGo
+
+        api_key = os.environ.get("OPENCODEGO_APIKEY")
+        if not api_key:
+            raise ValueError(
+                "CrossLingual requires an API key: set the OPENCODEGO_APIKEY "
+                "environment variable or pass an explicit 'model'."
+            )
+        return OpencodeGo(
+            model="minimax-m2.5",
+            api_key=api_key,
+            batch=1,
+            temperature=0.0,
+            enforce_json=True,
+            retry_times=1,
+            max_errors=1,
+        )
+
+    async def perturb(self, samples: list[Sample]) -> list[Sample]:
+        """Translate samples to the target language using an LLM.
+
+        Args:
+            samples: Baseline samples to translate.
+
+        Returns:
+            New list of Samples with translated ``question`` and ``options``
+            fields. ``id``, ``task``, ``answer``, and ``rationale`` are
+            preserved unchanged.
+        """
+        provider = self._translation_model
+        translated: list[Sample] = []
+        remaining = list(samples)
+
+        batch_idx = 0
+
+        while remaining:
+            batch_samples = remaining[: provider.batch_size]
+            remaining = remaining[provider.batch_size :]
+            batch_idx += 1
+            sample_ids = [s.id for s in batch_samples]
+            logger.info(
+                "Translate batch %d: %d samples [%s] → %s",
+                batch_idx, len(batch_samples), sample_ids, self.language.value,
+            )
+
+            messages, response_format = build_translation_messages(
+                batch_samples, self.language
+            )
+
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Translation batch %d messages:\n%s",
+                    batch_idx,
+                    json.dumps(messages, ensure_ascii=False, indent=2),
+                )
+
+            start = time.perf_counter()
+            try:
+                raw_response, _, _ = await provider.complete(
+                    messages, response_format
+                )
+            except Exception as exc:
+                logger.error(
+                    "Translation batch %d failed: %s: %s",
+                    batch_idx, type(exc).__name__, exc,
+                )
+                raise
+
+            elapsed = time.perf_counter() - start
+            logger.info(
+                "Translation batch %d completed in %.1fs", batch_idx, elapsed,
+            )
+
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Translation batch %d raw response:\n%s",
+                    batch_idx, raw_response,
+                )
+
+            parsed = parse_translation_response(raw_response, sample_ids)
+
+            for s in batch_samples:
+                entry = parsed.get(s.id)
+                if entry is None:
+                    logger.warning(
+                        "Sample %d missing from translation response — "
+                        "using original text", s.id,
+                    )
+                    translated.append(s)
+                    continue
+
+                translated.append(
+                    Sample(
+                        id=s.id,
+                        task=s.task,
+                        question=entry["question"],
+                        options=tuple(entry["options"]),
+                        answer=s.answer,
+                        rationale=s.rationale,
+                    )
+                )
+
+        return translated
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,9 @@
 Saves evaluation progress after each batch so that interrupted runs
 can resume without re-evaluating already-completed samples.
 Uses atomic writes (temp file + rename) for crash safety.
+
+Analysis partial files are stored under
+``{partial_dir}/analysis/{model_slug}_{label}.json``.
 """
 
 from __future__ import annotations
@@ -10,41 +13,42 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .types import EvaluatedSample, TaskType
 
 
-def _partial_filename(
+def _analysis_path(
+    partial_dir: str | Path,
     dataset_filename: str,
     model_slug: str,
-) -> str:
-    """Build the partial results filename.
-
-    Pattern: partial.{dataset_filename}.{model_slug}.json
-    """
-    return f"partial.{dataset_filename}.{model_slug}.json"
+    label: str,
+) -> Path:
+    return (
+        Path(partial_dir) / "analysis"
+        / f"{dataset_filename}.{model_slug}_{label}.json"
+    )
 
 
 def load_partial_results(
     partial_dir: str | Path,
     dataset_filename: str,
     model_slug: str,
+    label: str,
 ) -> list[EvaluatedSample]:
     """Load previously saved partial results.
 
     Args:
-        partial_dir: Directory containing partial result files.
+        partial_dir: Root directory for partial files.
         dataset_filename: Base filename of the dataset.
         model_slug: URL-safe model identifier.
+        label: Model label for disambiguation (e.g. ``"base"`` or ``"temp=0.7"``).
 
     Returns:
         List of previously evaluated samples, or empty list if none exist.
     """
-    fname = _partial_filename(dataset_filename, model_slug)
-    fpath = Path(partial_dir) / fname
+    fpath = _analysis_path(partial_dir, dataset_filename, model_slug, label)
 
     if not fpath.exists():
         return []
@@ -83,6 +87,7 @@ def save_partial_results(
     model_name: str,
     model_slug: str,
     provider_name: str,
+    label: str,
     results: list[EvaluatedSample],
     total_samples: int,
     started_at: str,
@@ -90,19 +95,18 @@ def save_partial_results(
     """Save partial results to disk with atomic write.
 
     Args:
-        partial_dir: Directory to store partial result files.
+        partial_dir: Root directory for partial files.
         dataset_filename: Base filename of the dataset.
         model_name: Full model name for metadata.
         model_slug: URL-safe model identifier for filename.
         provider_name: Provider name for metadata.
+        label: Model label for disambiguation.
         results: All evaluated samples so far (including newly completed).
         total_samples: Total number of samples in the dataset.
         started_at: ISO 8601 timestamp of when evaluation started.
     """
-    os.makedirs(partial_dir, exist_ok=True)
-
-    fname = _partial_filename(dataset_filename, model_slug)
-    fpath = Path(partial_dir) / fname
+    fpath = _analysis_path(partial_dir, dataset_filename, model_slug, label)
+    os.makedirs(fpath.parent, exist_ok=True)
 
     data = {
         "model": model_name,
@@ -128,16 +132,14 @@ def save_partial_results(
         ],
     }
 
-    # Atomic write: write to temp file in same directory, then rename
     fd, tmp_path = tempfile.mkstemp(
-        dir=partial_dir, prefix=".partial_", suffix=".tmp"
+        dir=fpath.parent, prefix=".partial_", suffix=".tmp"
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, fpath)
     except Exception:
-        # Clean up temp file on failure
         try:
             os.unlink(tmp_path)
         except OSError:

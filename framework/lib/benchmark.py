@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,7 @@ from .providers.base import BaseProvider
 from .report import BenchmarkResult, DatasetResult, ModelResult
 from .types import EvaluatedSample
 
-logger = logging.getLogger('llm_verbal_framework')
+logger = logging.getLogger("llm_verbal_framework")
 
 
 @dataclass
@@ -82,8 +83,11 @@ class Benchmark:
     Args:
         baseline: Path to the baseline (unperturbed) dataset.
         attacks: List of AttackType instances specifying perturbations to apply
-            or pre-computed files to load (via ``load_from``).
-        models: List of provider instances to evaluate.
+            or pre-computed files to load (via ``load_from``).  Attack labels
+            must be unique across all attack types.
+        models: List of provider instances to evaluate.  If the same model
+            appears multiple times (same slug), each instance must provide a
+            distinct ``label``.
         concurrency: Maximum number of parallel LLM requests.
         partial_results_dir: Directory to store/load partial results.
             Relative to ``base_dir`` when set.
@@ -98,12 +102,54 @@ class Benchmark:
         attacks: list[AttackType] | None = None,
         models: list[BaseProvider] | None = None,
         concurrency: int = 4,
-        partial_results_dir: str | Path = 'partial',
+        partial_results_dir: str | Path = "partial",
         base_dir: str | Path | None = None,
     ) -> None:
         self._concurrency = concurrency
+        self._attacks = attacks or []
         self._models = models or []
 
+        # ── Validate attack labels are unique ──
+        seen_labels: dict[str, str] = {}
+        for a in self._attacks:
+            if a.label is None:
+                raise ValueError(
+                    f"Attack of type '{a.attack_name}' has no label. "
+                    f"Provide an explicit label or ensure __post_init__ sets one."
+                )
+            if a.label in seen_labels:
+                raise ValueError(
+                    f"Duplicate perturbation label '{a.label}': "
+                    f"used by both '{seen_labels[a.label]}' and '{a.attack_name}'. "
+                    f"Labels must be unique across all attack types."
+                )
+            seen_labels[a.label] = a.attack_name
+
+        # ── Validate model labels ──
+        self._model_labels: list[str] = []
+        slug_counts = Counter(m.model_slug for m in self._models)
+        seen_slug_labels: dict[str, set[str]] = {}
+        for m in self._models:
+            slug = m.model_slug
+            if slug_counts[slug] > 1:
+                if not m.label:
+                    raise ValueError(
+                        f"Model '{m.model}' appears multiple times. "
+                        f"Provide a distinct 'label' for each instance "
+                        f"(e.g. label='temp=0.7')."
+                    )
+                slug_labels = seen_slug_labels.setdefault(slug, set())
+                if m.label in slug_labels:
+                    raise ValueError(
+                        f"Duplicate label '{m.label}' for model slug "
+                        f"'{slug}'. Labels must be unique per model slug."
+                    )
+                slug_labels.add(m.label)
+                self._model_labels.append(m.label)
+            else:
+                self._model_labels.append(m.label or "base")
+
+        # ── Directory setup ──
         if base_dir is not None:
             base_dir = Path(base_dir)
             base_dir.mkdir(parents=True, exist_ok=True)
@@ -113,25 +159,14 @@ class Benchmark:
             self._partial_dir = Path(partial_results_dir)
             self._base_dir = None
 
-        # Load datasets
-        logger.info('Loading baseline dataset: %s', baseline)
+        # ── Load baseline ──
+        logger.info("Loading baseline dataset: %s", baseline)
         self._baseline = load_dataset(baseline, attack=None)
         logger.info(
-            'Baseline loaded: %d samples, %d tasks',
+            "Baseline loaded: %d samples, %d tasks",
             len(self._baseline),
             len({s.task for s in self._baseline.samples}),
         )
-
-        self._attacked: list[Dataset] = []
-        for attack in attacks or []:
-            logger.info(
-                'Processing attack: %s (%s)', attack.attack_name, attack.label
-            )
-            ds = generate_perturbed_dataset(self._baseline, attack)
-            self._attacked.append(ds)
-            logger.info('  Prepared: %d samples', len(ds))
-
-        self._all_datasets = [self._baseline] + self._attacked
 
     def run(self) -> BenchmarkResult:
         """Run the full evaluation pipeline.
@@ -147,12 +182,29 @@ class Benchmark:
     async def _run_async(self) -> BenchmarkResult:
         """Async implementation of the benchmark pipeline."""
         started_at = datetime.now(timezone.utc).isoformat()
+
+        # ── Generate perturbed datasets asynchronously ──
+        self._attacked: list[Dataset] = []
+        for attack in self._attacks:
+            logger.info(
+                "Processing attack: %s (%s)", attack.attack_name, attack.label
+            )
+            ds = await generate_perturbed_dataset(
+                self._baseline, attack, self._partial_dir
+            )
+            self._attacked.append(ds)
+            logger.info("  Prepared: %d samples", len(ds))
+
+        all_datasets = [self._baseline] + self._attacked
+
         model_results: list[ModelResult] = []
         all_finished = True
 
-        for provider in self._models:
+        for idx, provider in enumerate(self._models):
+            label = self._model_labels[idx]
             logger.info(
-                'Evaluating model: %s (%s)', provider.display_name, provider.provider_name
+                "Evaluating model: %s (%s) [label=%s]",
+                provider.display_name, provider.provider_name, label,
             )
             model_result = ModelResult(
                 model_name=provider.display_name,
@@ -163,13 +215,13 @@ class Benchmark:
                 max_errors=provider.max_errors,
             )
 
-            for dataset in self._all_datasets:
+            for dataset in all_datasets:
                 if retry_state.aborted:
                     all_finished = False
                     break
 
                 ds_result = await self._evaluate_dataset(
-                    provider, dataset, started_at, retry_state
+                    provider, dataset, label, started_at, retry_state
                 )
                 model_result.evaluated_datasets.append(ds_result)
 
@@ -178,7 +230,7 @@ class Benchmark:
                 if retry_state.aborted or completed < expected:
                     all_finished = False
                     logger.warning(
-                        '  %s: %d/%d completed (incomplete)',
+                        "  %s: %d/%d completed (incomplete)",
                         dataset.filename,
                         completed,
                         expected,
@@ -186,14 +238,14 @@ class Benchmark:
 
                     if retry_state.aborted:
                         logger.warning(
-                            '  %s: ABORTING model — %d errors',
+                            "  %s: ABORTING model — %d errors",
                             dataset.filename,
                             retry_state.total_errors,
                         )
                         break
                 else:
                     logger.info(
-                        '  %s: %d/%d completed (%.1f%% accuracy)',
+                        "  %s: %d/%d completed (%.1f%% accuracy)",
                         dataset.filename,
                         completed,
                         expected,
@@ -219,6 +271,7 @@ class Benchmark:
         self,
         provider: BaseProvider,
         dataset: Dataset,
+        model_label: str,
         started_at: str,
         retry_state: _RetryState,
     ) -> DatasetResult:
@@ -233,8 +286,9 @@ class Benchmark:
             self._partial_dir,
             dataset.filename,
             provider.model_slug,
+            model_label,
         )
-        sessionless = [r for r in existing if not r.raw_response.startswith('ERROR:')]
+        sessionless = [r for r in existing if not r.raw_response.startswith("ERROR:")]
         completed_ids = {r.sample_id for r in sessionless}
         all_results = list(sessionless)
 
@@ -247,7 +301,7 @@ class Benchmark:
         ]
 
         if not remaining:
-            logger.info('  %s: all samples already completed', dataset.filename)
+            logger.info("  %s: all samples already completed", dataset.filename)
             return DatasetResult(
                 dataset_file=dataset.filename,
                 attack=dataset.attack,
@@ -255,7 +309,7 @@ class Benchmark:
             )
 
         logger.info(
-            '  %s: %d remaining (of %d total, %d cached)',
+            "  %s: %d remaining (of %d total, %d cached)",
             dataset.filename,
             len(remaining),
             len(dataset),
@@ -276,7 +330,7 @@ class Benchmark:
 
             batch_id = batch_counter + batch_idx
             sample_ids = [s.id for s in batch_samples]
-            logger.info('    Batch %d: Evaluating samples %s', batch_id, sample_ids)
+            logger.info("    Batch %d: Evaluating samples %s", batch_id, sample_ids)
 
             batch_results = await self._evaluate_batch(
                 provider, batch_samples, batch_id, semaphore, retry_state, dataset.filename
@@ -290,7 +344,7 @@ class Benchmark:
 
             correct = sum(1 for r in batch_results if r.correct)
             logger.info(
-                '    Batch %d: Completed (%d/%d correct)',
+                "    Batch %d: Completed (%d/%d correct)",
                 batch_id, correct, len(batch_samples),
             )
 
@@ -301,6 +355,7 @@ class Benchmark:
                 model_name=provider.display_name,
                 model_slug=provider.model_slug,
                 provider_name=provider.provider_name,
+                label=model_label,
                 results=all_results,
                 total_samples=len(dataset),
                 started_at=started_at,
@@ -331,11 +386,11 @@ class Benchmark:
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    '    Batch %d: Request messages:\n%s',
+                    "    Batch %d: Request messages:\n%s",
                     batch_id, json.dumps(messages, ensure_ascii=False, indent=4),
                 )
                 logger.debug(
-                    '    Batch %d: Response format:\n%s',
+                    "    Batch %d: Response format:\n%s",
                     batch_id, json.dumps(response_format, ensure_ascii=False, indent=4),
                 )
 
@@ -348,11 +403,11 @@ class Benchmark:
                         messages, response_format
                     )
                     logger.debug(
-                        '    Batch %d: Raw response:\n%s', batch_id, raw_response,
+                        "    Batch %d: Raw response:\n%s", batch_id, raw_response,
                     )
                 except Exception as e:
                     logger.error(
-                        '    Batch %d attempt %d/%d failed: %s: %s',
+                        "    Batch %d attempt %d/%d failed: %s: %s",
                         batch_id, attempt + 1, retry_state.retry_times + 1,
                         type(e).__name__, e,
                     )
@@ -360,7 +415,7 @@ class Benchmark:
                         # All retries exhausted
                         retry_state.record_failure(dataset_filename, sample_ids)
                         logger.warning(
-                            '    Batch %d: all %d attempts failed — skipping %d samples',
+                            "    Batch %d: all %d attempts failed — skipping %d samples",
                             batch_id, retry_state.retry_times + 1, len(samples),
                         )
                         return None

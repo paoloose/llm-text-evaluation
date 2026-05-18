@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 
-from .types import Sample, TaskType
+from .types import CrossLingualLanguage, Sample, TaskType
 
 
 # ── System prompt ──────────────────────────────────────────────────────────────
@@ -226,3 +225,174 @@ def parse_batch_response(
         pass
 
     return results
+
+
+# ── Cross-lingual translation ──────────────────────────────────────────────────
+
+TRANSLATION_SYSTEM = """\
+You are a professional translator. Translate the following verbal reasoning \
+multiple-choice questions into {language_name}.
+
+RULES:
+- Translate the question text and ALL answer options accurately.
+- Preserve the exact meaning, nuance, and difficulty level.
+- Keep each option paired to its original 0-based index.
+- The correct answer index must remain unchanged.
+- Maintain the same number of options in the same order.
+- Your response must be valid JSON matching the required schema."""
+
+TRANSLATION_SINGLE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "translation_single",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Translated question text",
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Translated answer options in original order",
+                },
+            },
+            "required": ["question", "options"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+TRANSLATION_BATCH_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "translation_batch",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "translations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "integer",
+                                "description": "Sample ID from the question",
+                            },
+                            "question": {
+                                "type": "string",
+                                "description": "Translated question text",
+                            },
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Translated answer options in original order",
+                            },
+                        },
+                        "required": ["id", "question", "options"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["translations"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_LANGUAGE_NAMES: dict[CrossLingualLanguage, str] = {
+    CrossLingualLanguage.FRENCH: "French",
+    CrossLingualLanguage.CHINESE: "Chinese",
+}
+
+
+def build_translation_messages(
+    samples: list[Sample],
+    language: CrossLingualLanguage,
+) -> tuple[list[dict[str, str]], dict]:
+    lang_name = _LANGUAGE_NAMES.get(language, language.value.capitalize())
+
+    if len(samples) == 1:
+        response_format = TRANSLATION_SINGLE_SCHEMA
+        user_msg = _format_translation_user(samples, lang_name)
+    else:
+        response_format = TRANSLATION_BATCH_SCHEMA
+        user_msg = _format_translation_batch_user(samples, lang_name)
+
+    system_msg = TRANSLATION_SYSTEM.format(language_name=lang_name)
+
+    return (
+        [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
+        response_format,
+    )
+
+
+def _format_translation_user(samples: list[Sample], lang_name: str) -> str:
+    return (
+        f"Translate the following question and its answer options "
+        f"into {lang_name}:\n\n"
+        f"Question (id: {samples[0].id}):\n{samples[0].question}\n\n"
+        f"Options:\n{_format_options(samples[0].options)}"
+    )
+
+
+def _format_translation_batch_user(samples: list[Sample], lang_name: str) -> str:
+    parts: list[str] = [
+        f"Translate each of the following questions and their answer options "
+        f"into {lang_name}:\n"
+    ]
+    for i, s in enumerate(samples, 1):
+        parts.append(
+            f"---\nQuestion {i} (id: {s.id}):\n{s.question}\n\n"
+            f"Options:\n{_format_options(s.options)}\n"
+        )
+    return "\n".join(parts)
+
+
+def parse_translation_response(
+    raw: str,
+    expected_ids: list[int],
+) -> dict[int, dict[str, object]]:
+    results: dict[int, dict[str, object]] = {}
+    expected_set = set(expected_ids)
+
+    try:
+        data = json.loads(raw.strip())
+    except (json.JSONDecodeError, TypeError):
+        return results
+
+    if isinstance(data, dict):
+        if "translations" in data:
+            for item in data["translations"]:
+                _ingest_translation_item(item, expected_set, results)
+        elif "id" in data and "question" in data and "options" in data:
+            _ingest_translation_item(data, expected_set, results)
+        elif "question" in data and "options" in data and len(expected_ids) == 1:
+            _ingest_translation_item(
+                {"id": expected_ids[0], **data}, expected_set, results
+            )
+
+    return results
+
+
+def _ingest_translation_item(
+    item: object,
+    expected_ids: set[int],
+    results: dict[int, dict[str, object]],
+) -> None:
+    if not isinstance(item, dict):
+        return
+    sid = item.get("id")
+    question = item.get("question")
+    options = item.get("options")
+    if (
+        isinstance(sid, int)
+        and sid in expected_ids
+        and isinstance(question, str)
+        and isinstance(options, list)
+        and all(isinstance(o, str) for o in options)
+    ):
+        results[sid] = {"question": question, "options": options}
