@@ -3,31 +3,47 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 
 
 class BaseProvider(ABC):
     """Abstract base class for LLM inference providers.
-
-    All providers communicate via the OpenAI-compatible chat completions API,
-    but differ in base URL, authentication, and capability details.
 
     Subclasses must implement:
         - complete(): Send a chat completion request
         - provider_name: Human-readable provider identifier
 
     Configurable per-provider options (set in constructor):
+        - label: Human-readable tag for this configuration variant
+            (e.g. "temp=0.7").  When set it appears in reports and logs
+            alongside the model name.
         - temperature: Sampling temperature (default 0.0 for deterministic output)
         - max_tokens: Maximum tokens in the response
-        - response_format_mode: How to handle structured output
-          ("json_schema", "json_object", or "none")
+        - enforce_json: Whether to enforce structured JSON output.
+            Each provider chooses the best strategy for its model:
+            json_schema, json_object, or prompt-level instruction.
+        - retry_times: Maximum retries per sample when API requests fail.
+            After retry_times+1 total failures for a sample, it is skipped
+            for the rest of the session (default 1, i.e. 2 total attempts).
+        - max_errors: Maximum total API errors before aborting the model
+            for the current session. Counted per failed batch attempt
+            (default 3).
     """
 
     model: str
+    label: str | None
     batch_size: int
     temperature: float
     max_tokens: int | None
-    response_format_mode: str
+    enforce_json: bool
+    retry_times: int
+    max_errors: int
+
+    @property
+    def display_name(self) -> str:
+        """Name shown in reports — model plus optional label."""
+        if self.label:
+            return f"{self.model} ({self.label})"
+        return self.model
 
     @abstractmethod
     async def complete(
@@ -64,4 +80,5 @@ class BaseProvider(ABC):
         return (
             f"{type(self).__name__}(model={self.model!r}, batch={self.batch_size}, "
             f"temperature={self.temperature})"
+            + (f", label={self.label!r}" if self.label else "")
         )

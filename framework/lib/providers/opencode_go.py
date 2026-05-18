@@ -2,7 +2,7 @@
 
 OpenCode Go provides access to curated open coding models via two API formats:
 - OpenAI-compatible /v1/chat/completions (most models)
-- Anthropic-compatible /v1/messages (MiniMax M2.5, M2.7)
+- Anthropic Messages /v1/messages (MiniMax M2.5, M2.7)
 
 Base URL: https://opencode.ai/zen/go/v1
 Auth: Bearer token via API key.
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
-import httpx
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from .base import BaseProvider
@@ -37,10 +37,12 @@ class OpencodeGo(BaseProvider):
         batch: Number of questions per prompt/request.
         temperature: Sampling temperature. 0.0 = deterministic.
         max_tokens: Maximum tokens in the response (None = provider default).
-        response_format_mode: Structured output mode.
-            "json_schema" (default): JSON schema enforcement (OpenAI only).
-            "json_object": Basic JSON mode.
-            "none": No format enforcement, rely on prompt.
+        enforce_json: Whether to enforce structured JSON output (default True).
+            OpenAI models → json_schema.
+            Anthropic models → prompt-level schema instruction.
+        retry_times: Max retries per sample on API error (default 1).
+        max_errors: Max total API errors before aborting the model (default 3).
+        label: Optional tag for this configuration variant (e.g. "temp=0.7").
     """
 
     def __init__(
@@ -50,39 +52,36 @@ class OpencodeGo(BaseProvider):
         batch: int = 1,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-        response_format_mode: str = "json_schema",
+        enforce_json: bool = True,
+        retry_times: int = 1,
+        max_errors: int = 3,
+        label: str | None = None,
     ) -> None:
         self.model = model
+        self.label = label
         self.batch_size = batch
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.response_format_mode = response_format_mode
+        self.enforce_json = enforce_json
+        self.retry_times = retry_times
+        self.max_errors = max_errors
 
         self._is_anthropic = model.lower() in ANTHROPIC_MODELS
 
-        auth_headers = {
-            "Authorization": f"Bearer {api_key}",
-        }
-
         if self._is_anthropic:
-            self._http = httpx.AsyncClient(
+            self._client = AsyncAnthropic(
                 base_url="https://opencode.ai/zen/go/v1",
-                headers={
-                    **auth_headers,
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
-                timeout=httpx.Timeout(120.0),
+                api_key=api_key,
+                max_retries=0,
+                timeout=120.0,
             )
-            self._client = None
         else:
             self._client = AsyncOpenAI(
                 base_url="https://opencode.ai/zen/go/v1",
                 api_key=api_key,
-                max_retries=2,
+                max_retries=0,
                 timeout=120.0,
             )
-            self._http = None
 
     @property
     def provider_name(self) -> str:
@@ -111,10 +110,14 @@ class OpencodeGo(BaseProvider):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
-        if response_format and self.response_format_mode == "json_schema":
-            kwargs["response_format"] = response_format
-        elif self.response_format_mode == "json_object":
-            kwargs["response_format"] = {"type": "json_object"}
+        if response_format:
+            if self.enforce_json:
+                kwargs["response_format"] = response_format
+            else:
+                for msg in messages:
+                    if msg["role"] == "system":
+                        msg["content"] += "\n\nExpected response schema:\n" + json.dumps(response_format, ensure_ascii=False)
+                        break
 
         response = await self._client.chat.completions.create(**kwargs)
 
@@ -141,7 +144,7 @@ class OpencodeGo(BaseProvider):
             else:
                 api_messages.append({"role": role, "content": content})
 
-        if response_format and self.response_format_mode == "json_schema":
+        if response_format and self.enforce_json:
             schema_instruction = (
                 "\n\nIMPORTANT: You must respond with valid JSON matching this schema:\n"
                 + json.dumps(response_format, ensure_ascii=False)
@@ -151,35 +154,23 @@ class OpencodeGo(BaseProvider):
             else:
                 system = "Respond with valid JSON.\n" + schema_instruction
 
-        body: dict = {
+        kwargs: dict = {
             "model": self.model,
             "messages": api_messages,
             "temperature": self.temperature,
         }
 
         if system:
-            body["system"] = system
+            kwargs["system"] = system
 
         if self.max_tokens is not None:
-            body["max_tokens"] = self.max_tokens
+            kwargs["max_tokens"] = self.max_tokens
 
-        response = await self._http.post("/messages", json=body)
-        response.raise_for_status()
-        data = response.json()
+        response = await self._client.messages.create(**kwargs)
 
-        content = ""
-        for block in data.get("content", []):
-            if isinstance(block, dict) and block.get("type") == "text":
-                content += block.get("text", "")
+        content = response.content[0].text if response.content else ""
 
-        usage = data.get("usage", {})
-        prompt_tokens = usage.get("input_tokens", 0)
-        completion_tokens = usage.get("output_tokens", 0)
+        prompt_tokens = response.usage.input_tokens if response.usage else 0
+        completion_tokens = response.usage.output_tokens if response.usage else 0
 
         return content, prompt_tokens, completion_tokens
-
-    async def close(self) -> None:
-        if self._http:
-            await self._http.aclose()
-        if self._client:
-            await self._client.close()

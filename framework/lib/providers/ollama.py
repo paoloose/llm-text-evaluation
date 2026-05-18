@@ -11,6 +11,8 @@ Auth: Not required locally. For remote servers behind a reverse proxy,
 
 from __future__ import annotations
 
+import json
+
 from openai import AsyncOpenAI
 
 from .base import BaseProvider
@@ -28,10 +30,12 @@ class Ollama(BaseProvider):
                  Ignored by local Ollama instances (any non-empty string accepted).
         temperature: Sampling temperature. 0.0 = deterministic.
         max_tokens: Maximum tokens in the response (None = provider default).
-        response_format_mode: Structured output mode.
-            "json_schema" (default): Grammar-enforced structured output.
-            "json_object": Basic JSON mode.
-            "none": No format enforcement, rely on prompt.
+        enforce_json: Whether to enforce structured JSON output (default True).
+            True → json_schema (grammar-enforced).
+            False → no format enforcement, rely on prompt.
+        retry_times: Max retries per sample on API error (default 1).
+        max_errors: Max total API errors before aborting the model (default 3).
+        label: Optional tag for this configuration variant (e.g. "temp=0.7").
     """
 
     def __init__(
@@ -42,22 +46,27 @@ class Ollama(BaseProvider):
         api_key: str = "ollama",
         temperature: float = 0.0,
         max_tokens: int | None = None,
-        response_format_mode: str = "json_schema",
+        enforce_json: bool = True,
+        retry_times: int = 1,
+        max_errors: int = 3,
+        label: str | None = None,
     ) -> None:
         self.model = model
+        self.label = label
         self.batch_size = batch
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.response_format_mode = response_format_mode
+        self.enforce_json = enforce_json
+        self.retry_times = retry_times
+        self.max_errors = max_errors
 
-        # Normalize URL: ensure http(s) prefix and /v1 suffix
         base = url if url.startswith("http") else f"http://{url}"
         base = base.rstrip("/")
 
         self._client = AsyncOpenAI(
             base_url=f"{base}/v1",
             api_key=api_key,
-            max_retries=2,
+            max_retries=0,
             timeout=600.0,
         )
 
@@ -79,11 +88,14 @@ class Ollama(BaseProvider):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
-        # Apply response format based on configured mode
-        if response_format and self.response_format_mode == "json_schema":
-            kwargs["response_format"] = response_format
-        elif self.response_format_mode == "json_object":
-            kwargs["response_format"] = {"type": "json_object"}
+        if response_format:
+            if self.enforce_json:
+                kwargs["response_format"] = response_format
+            else:
+                for msg in messages:
+                    if msg["role"] == "system":
+                        msg["content"] += "\n\nExpected response schema:\n" + json.dumps(response_format, ensure_ascii=False)
+                        break
 
         response = await self._client.chat.completions.create(**kwargs)
 

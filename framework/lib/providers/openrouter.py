@@ -3,10 +3,12 @@
 OpenRouter provides a unified API to access hundreds of AI models.
 Base URL: https://openrouter.ai/api/v1
 Auth: Bearer token via API key.
-Structured output: json_schema or json_object (model-dependent).
+Structured output: json_schema (model-dependent).
 """
 
 from __future__ import annotations
+
+import json
 
 from openai import AsyncOpenAI
 
@@ -23,12 +25,14 @@ class OpenRouter(BaseProvider):
         batch: Number of questions per prompt/request.
         temperature: Sampling temperature. 0.0 = deterministic.
         max_tokens: Maximum tokens in the response (None = provider default).
-        response_format_mode: Structured output mode.
-            "json_schema" (default): Full JSON schema enforcement (model-dependent).
-            "json_object": Basic JSON mode with prompt enforcement.
-            "none": No format enforcement, rely on prompt.
+        enforce_json: Whether to enforce structured JSON output (default True).
+            True → json_schema (model-dependent support).
+            False → no format enforcement, rely on prompt.
         site_url: Optional HTTP-Referer header for OpenRouter rankings.
         site_name: Optional X-Title header for OpenRouter rankings.
+        retry_times: Max retries per sample on API error (default 1).
+        max_errors: Max total API errors before aborting the model (default 3).
+        label: Optional tag for this configuration variant (e.g. "temp=0.7").
     """
 
     def __init__(
@@ -38,15 +42,21 @@ class OpenRouter(BaseProvider):
         batch: int = 1,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-        response_format_mode: str = "json_schema",
+        enforce_json: bool = True,
         site_url: str | None = None,
         site_name: str | None = None,
+        retry_times: int = 1,
+        max_errors: int = 3,
+        label: str | None = None,
     ) -> None:
         self.model = model
+        self.label = label
         self.batch_size = batch
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.response_format_mode = response_format_mode
+        self.enforce_json = enforce_json
+        self.retry_times = retry_times
+        self.max_errors = max_errors
 
         extra_headers: dict[str, str] = {}
         if site_url:
@@ -58,7 +68,7 @@ class OpenRouter(BaseProvider):
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key,
             default_headers=extra_headers if extra_headers else None,
-            max_retries=2,
+            max_retries=0,
             timeout=120.0,
         )
 
@@ -80,11 +90,14 @@ class OpenRouter(BaseProvider):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
-        # Apply response format based on configured mode
-        if response_format and self.response_format_mode == "json_schema":
-            kwargs["response_format"] = response_format
-        elif self.response_format_mode == "json_object":
-            kwargs["response_format"] = {"type": "json_object"}
+        if response_format:
+            if self.enforce_json:
+                kwargs["response_format"] = response_format
+            else:
+                for msg in messages:
+                    if msg["role"] == "system":
+                        msg["content"] += "\n\nExpected response schema:\n" + json.dumps(response_format, ensure_ascii=False)
+                        break
 
         response = await self._client.chat.completions.create(**kwargs)
 
