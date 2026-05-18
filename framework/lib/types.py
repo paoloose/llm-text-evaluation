@@ -47,6 +47,17 @@ class Sample:
 
 
 @dataclass
+class ChoiceLogprobs:
+    """Per-answer-choice log probabilities.
+
+    Maps `answer_index → logprob` for each answer choice the model
+    assigned a probability to.
+    """
+
+    choice_logprobs: dict[int, float]  # answer_index → logprob
+
+
+@dataclass
 class EvaluatedSample:
     """Result of evaluating a single sample against a model.
 
@@ -60,6 +71,8 @@ class EvaluatedSample:
         latency_ms: Wall-clock time for this prediction in milliseconds.
         batch_id: Identifier of the batch this sample was part of.
         timestamp: ISO 8601 timestamp of when the evaluation completed.
+        logprobs: Optional per-choice log probabilities, when the provider
+            supports logprob extraction.
     """
 
     sample_id: int
@@ -71,3 +84,4 @@ class EvaluatedSample:
     latency_ms: float
     batch_id: int
     timestamp: str = ""
+    logprobs: ChoiceLogprobs | None = None

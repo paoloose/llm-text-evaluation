@@ -271,10 +271,12 @@ class BenchmarkResult:
                 lines.append("### Robustness Metrics")
                 lines.append("")
                 lines.append(
-                    "| Attack | Accuracy Drop (Δ) | Flip Rate | Consistency |"
+                    "| Attack | Acc. Drop (Δ) | Flip Rate | Consistency | "
+                    "Pos. Transfer | Neg. Transfer | Rank Cons. |"
                 )
                 lines.append(
-                    "|--------|-------------------|-----------|-------------|"
+                    "|--------|---------------|-----------|-------------|"
+                    "--------------|--------------|------------|"
                 )
                 for ds in attacked_datasets:
                     if ds._robustness:
@@ -284,9 +286,16 @@ class BenchmarkResult:
                             if ds.attack
                             else "—"
                         )
+                        rank_str = (
+                            f"{r.rank_consistency:.3f}"
+                            if r.rank_consistency is not None
+                            else "—"
+                        )
                         lines.append(
                             f"| {attack_str} | {r.accuracy_drop:+.2%} | "
-                            f"{r.flip_rate:.2%} | {r.consistency:.2%} |"
+                            f"{r.flip_rate:.2%} | {r.consistency:.2%} | "
+                            f"{r.positive_transfer:.2%} | {r.negative_transfer:.2%} | "
+                            f"{rank_str} |"
                         )
                 lines.append("")
 

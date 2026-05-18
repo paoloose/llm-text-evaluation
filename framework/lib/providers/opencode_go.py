@@ -16,7 +16,9 @@ import logging
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+from ..types import ChoiceLogprobs
 from .base import BaseProvider
+from .ollama import _extract_choice_logprobs
 
 logger = logging.getLogger("llm_verbal_framework")
 
@@ -43,6 +45,9 @@ class OpencodeGo(BaseProvider):
         retry_times: Max retries per sample on API error (default 1).
         max_errors: Max total API errors before aborting the model (default 3).
         label: Optional tag for this configuration variant (e.g. "temp=0.7").
+        logprobs: Whether to request token logprobs (OpenAI only; Anthropic
+            always returns None).
+        top_logprobs: Top logprobs per token (OpenAI only).
     """
 
     def __init__(
@@ -56,6 +61,8 @@ class OpencodeGo(BaseProvider):
         retry_times: int = 1,
         max_errors: int = 3,
         label: str | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
     ) -> None:
         self.model = model
         self.label = label
@@ -65,6 +72,8 @@ class OpencodeGo(BaseProvider):
         self.enforce_json = enforce_json
         self.retry_times = retry_times
         self.max_errors = max_errors
+        self.logprobs = logprobs
+        self.top_logprobs = top_logprobs
 
         self._is_anthropic = model.lower() in ANTHROPIC_MODELS
 
@@ -91,7 +100,7 @@ class OpencodeGo(BaseProvider):
         self,
         messages: list[dict[str, str]],
         response_format: dict | None = None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, ChoiceLogprobs | None]:
         if self._is_anthropic:
             return await self._complete_anthropic(messages, response_format)
         return await self._complete_openai(messages, response_format)
@@ -100,7 +109,7 @@ class OpencodeGo(BaseProvider):
         self,
         messages: list[dict[str, str]],
         response_format: dict | None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, ChoiceLogprobs | None]:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -119,6 +128,11 @@ class OpencodeGo(BaseProvider):
                         msg["content"] += "\n\nExpected response schema:\n" + json.dumps(response_format, ensure_ascii=False)
                         break
 
+        if self.logprobs:
+            kwargs["logprobs"] = True
+            if self.top_logprobs is not None:
+                kwargs["top_logprobs"] = self.top_logprobs
+
         response = await self._client.chat.completions.create(**kwargs)
 
         content = response.choices[0].message.content or ""
@@ -126,13 +140,20 @@ class OpencodeGo(BaseProvider):
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
 
-        return content, prompt_tokens, completion_tokens
+        logprobs = None
+        if self.logprobs:
+            try:
+                logprobs = _extract_choice_logprobs(response.choices[0].logprobs)
+            except Exception:
+                logprobs = None
+
+        return content, prompt_tokens, completion_tokens, logprobs
 
     async def _complete_anthropic(
         self,
         messages: list[dict[str, str]],
         response_format: dict | None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, ChoiceLogprobs | None]:
         system = None
         api_messages: list[dict] = []
 
@@ -173,4 +194,4 @@ class OpencodeGo(BaseProvider):
         prompt_tokens = response.usage.input_tokens if response.usage else 0
         completion_tokens = response.usage.output_tokens if response.usage else 0
 
-        return content, prompt_tokens, completion_tokens
+        return content, prompt_tokens, completion_tokens, None

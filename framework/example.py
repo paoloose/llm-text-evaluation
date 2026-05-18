@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .lib import Benchmark, providers, attacks
+from lib import Benchmark, providers, attacks
 
 benchmark = Benchmark(
     baseline=Path("dataset.json"),
@@ -11,8 +11,20 @@ benchmark = Benchmark(
     ],
     models=[
         providers.Ollama(model="qwen2.5:7b-instruct", batch=2),
-        providers.OpenRouter(model="nvidia/nemotron-3-super-120b-a12b:free", api_key="sk-or-v1-...", batch=2),
-        providers.OpencodeGo(model="kimi-k2.6", api_key="oc-go-v1-...", batch=2),
+        providers.OpenRouter(
+            model="nvidia/nemotron-3-super-120b-a12b:free",
+            api_key="sk-or-v1-...",
+            batch=2,
+            logprobs=True,
+            top_logprobs=5,
+        ),
+        providers.OpencodeGo(
+            model="kimi-k2.6",
+            api_key="oc-go-v1-...",
+            batch=2,
+            logprobs=True,
+            top_logprobs=5,
+        ),
         providers.OpencodeGo(model="minimax-m2.7", api_key="oc-go-v1-...", batch=1),
     ],
     concurrency=4,

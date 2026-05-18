@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..types import ChoiceLogprobs
+
 
 class BaseProvider(ABC):
     """Abstract base class for LLM inference providers.
@@ -27,6 +29,10 @@ class BaseProvider(ABC):
         - max_errors: Maximum total API errors before aborting the model
             for the current session. Counted per failed batch attempt
             (default 3).
+        - logprobs: Whether to request token logprobs from the API.
+            Providers that don't support it silently return None.
+        - top_logprobs: Number of top logprobs per token (only when
+            logprobs=True).  Providers may cap or ignore this value.
     """
 
     model: str
@@ -37,6 +43,8 @@ class BaseProvider(ABC):
     enforce_json: bool
     retry_times: int
     max_errors: int
+    logprobs: bool
+    top_logprobs: int | None
 
     @property
     def display_name(self) -> str:
@@ -50,7 +58,7 @@ class BaseProvider(ABC):
         self,
         messages: list[dict[str, str]],
         response_format: dict | None = None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, ChoiceLogprobs | None]:
         """Send a chat completion request.
 
         Args:
@@ -58,7 +66,9 @@ class BaseProvider(ABC):
             response_format: Optional structured output format spec.
 
         Returns:
-            Tuple of (content_text, prompt_tokens, completion_tokens).
+            Tuple of (content_text, prompt_tokens, completion_tokens, logprobs).
+            logprobs is None when the provider does not support it or
+            logprobs was not requested.
 
         Raises:
             openai.APIError: On API communication failure.
