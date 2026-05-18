@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -115,8 +116,9 @@ class CrossLingual(AttackType):
         return OpencodeGo(
             model="minimax-m2.5",
             api_key=api_key,
-            batch=1,
+            batch=10,
             temperature=0.0,
+            max_tokens=4096*2,
             enforce_json=True,
             retry_times=1,
             max_errors=1,

@@ -70,7 +70,7 @@ class OpencodeGo(BaseProvider):
 
         if self._is_anthropic:
             self._client = AsyncAnthropic(
-                base_url="https://opencode.ai/zen/go/v1",
+                base_url="https://opencode.ai/zen/go",
                 api_key=api_key,
                 max_retries=0,
                 timeout=120.0,
@@ -168,9 +168,14 @@ class OpencodeGo(BaseProvider):
 
         response = await self._client.messages.create(**kwargs)
 
-        content = response.content[0].text if response.content else ""
+        content = ""
+        if response.content:
+            for block in response.content:
+                if hasattr(block, "text"):
+                    content = block.text
+                    break
 
-        prompt_tokens = response.usage.input_tokens if response.usage else 0
-        completion_tokens = response.usage.output_tokens if response.usage else 0
+        prompt_tokens = getattr(response.usage, "input_tokens", 0) if response.usage else 0
+        completion_tokens = getattr(response.usage, "output_tokens", 0) if response.usage else 0
 
         return content, prompt_tokens, completion_tokens

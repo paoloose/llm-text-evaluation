@@ -166,7 +166,7 @@ def _load_perturbation_partial(path: Path) -> list[Sample]:
             samples.append(
                 Sample(
                     id=item["id"],
-                    task=item["task"],
+                    task=TaskType(item["task"]),
                     question=item["question"],
                     options=tuple(item["options"]),
                     answer=item["answer"],

@@ -230,15 +230,18 @@ def parse_batch_response(
 # ── Cross-lingual translation ──────────────────────────────────────────────────
 
 TRANSLATION_SYSTEM = """\
-You are a professional translator. Translate the following verbal reasoning \
-multiple-choice questions into {language_name}.
+You are a professional translator. Your task is to translate verbal reasoning \
+multiple-choice questions into {language_name}. You MUST translate EVERY word \
+of the text.
 
-RULES:
-- Translate the question text and ALL answer options accurately.
+CRITICAL RULES:
+- Translate ALL text completely. Do NOT skip any sentence, paragraph, or \
+labelled item (I, II, III, etc.). EVERYTHING must be translated.
+- Translate ALL answer options completely. Every word in every option.
 - Preserve the exact meaning, nuance, and difficulty level.
-- Keep each option paired to its original 0-based index.
-- The correct answer index must remain unchanged.
-- Maintain the same number of options in the same order.
+- Preserve all formatting: line breaks, roman numerals, option numbering.
+- The correct answer index must be preserved.
+- The number of options and their order must be preserved.
 - Your response must be valid JSON matching the required schema."""
 
 TRANSLATION_SINGLE_SCHEMA = {
