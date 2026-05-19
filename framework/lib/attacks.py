@@ -169,12 +169,11 @@ class CrossLingual(AttackType):
                 batch_samples, self.language
             )
 
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Translation batch %d messages:\n%s",
-                    batch_idx,
-                    json.dumps(messages, ensure_ascii=False, indent=2),
-                )
+            logger.debug(
+                "Translation batch %d messages:\n%s",
+                batch_idx,
+                json.dumps(messages, ensure_ascii=False, indent=2),
+            )
 
             batch_translated: list[Sample] | None = None
             for attempt in range(provider.retry_times + 1):
@@ -199,11 +198,10 @@ class CrossLingual(AttackType):
                     batch_idx, elapsed, attempt + 1,
                 )
 
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Translation batch %d raw response:\n%s",
-                        batch_idx, raw_response,
-                    )
+                logger.debug(
+                    "Translation batch %d raw response:\n%s",
+                    batch_idx, raw_response,
+                )
 
                 parsed = parse_translation_response(raw_response, sample_ids)
 

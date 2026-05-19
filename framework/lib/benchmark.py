@@ -508,11 +508,10 @@ class Benchmark:
         async with semaphore:
             messages, response_format = build_messages(samples)
 
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "    Batch %d: Response format:\n%s",
-                    batch_id, json.dumps(response_format, ensure_ascii=False, indent=4),
-                )
+            logger.debug(
+                "    Batch %d: Response format:\n%s",
+                batch_id, json.dumps(response_format, ensure_ascii=False, indent=4),
+            )
 
             sample_ids = [s.id for s in samples]
 
@@ -533,11 +532,10 @@ class Benchmark:
                             choice_logprobs = ChoiceLogprobs(choice_logprobs=filtered)
                         else:
                             choice_logprobs = None
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "    Batch %d: Final messages (after provider processing):\n%s",
-                            batch_id, json.dumps(messages, ensure_ascii=False, indent=4),
-                        )
+                    logger.debug(
+                        "    Batch %d: Final messages (after provider processing):\n%s",
+                        batch_id, json.dumps(messages, ensure_ascii=False, indent=4),
+                    )
                 except Exception as e:
                     logger.error(
                         "    Batch %d attempt %d/%d failed: %s: %s",

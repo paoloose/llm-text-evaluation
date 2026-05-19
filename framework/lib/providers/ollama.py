@@ -135,11 +135,6 @@ class Ollama(BaseProvider):
             kwargs["logprobs"] = True
             if self.top_logprobs is not None:
                 kwargs["top_logprobs"] = self.top_logprobs
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Final Ollama request messages:\n%s",
-                json.dumps(messages, ensure_ascii=False, indent=2),
-            )
 
         response = await self._client.chat.completions.create(**kwargs)
 

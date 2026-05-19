@@ -138,11 +138,6 @@ class OpencodeGo(BaseProvider):
             kwargs["logprobs"] = True
             if self.top_logprobs is not None:
                 kwargs["top_logprobs"] = self.top_logprobs
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Final OpenAI request messages:\n%s",
-                json.dumps(messages, ensure_ascii=False, indent=2),
-            )
 
         response = await self._client.chat.completions.create(**kwargs)
 
@@ -207,12 +202,6 @@ class OpencodeGo(BaseProvider):
 
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
-
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Final Anthropic request: system=%s, messages=%s",
-                system, json.dumps(api_messages, ensure_ascii=False, indent=2),
-            )
 
         response = await self._client.messages.create(**kwargs)
 

@@ -232,8 +232,15 @@ def parse_batch_response(
 TRANSLATION_SYSTEM_PROMPT = """\
 Translate the user's question & options into {language_name}.\nTags:\n\
 - The "question" tag contains the full question. Do not stop until you find the closing tag: </question>. It has a length property, and your translated question should roughly have the same length.\n\
-- The "options" tag contains a list of human readable posible answers to the question. Parse them until closing tag: </options>.\n\
-Produce ONLY the requested JSON. No extra text. Translate every word."""
+- The "options" tag contains a list of human readable possible answers to the question. Parse them until closing tag: </options>.\n\
+\n\
+OUTPUT FORMAT — return ONLY a JSON object with a single key:\n\
+  "translations": an array of objects, each with:\n\
+    "id":       the sample id (integer)\n\
+    "question": translated question text (string)\n\
+    "options":  translated answer options in original order (array of strings)\n\
+\n\
+Do NOT wrap the JSON in markdown code blocks. No extra text. Translate every word."""
 
 _LANGUAGE_NAMES: dict[CrossLingualLanguage, str] = {
     CrossLingualLanguage.FRENCH: "French",
@@ -395,6 +402,37 @@ def _format_translation_batch_user(samples: list[Sample], lang_name: str) -> str
     return "\n".join(parts)
 
 
+def _repair_translation_json(raw: str) -> str:
+    """Repair LLM-generated JSON that contains unescaped typographic double
+    quotes inside string values (e.g. French ``d"interprétation``).
+
+    Heuristic: a ``"`` preceded and followed by an alphanumeric character
+    is treated as an inner quote and escaped with a backslash.
+    """
+    chars = list(raw)
+    escape_next = False
+    i = 0
+    while i < len(chars):
+        c = chars[i]
+        if escape_next:
+            escape_next = False
+            i += 1
+            continue
+        if c == "\\":
+            escape_next = True
+            i += 1
+            continue
+        if c == '"':
+            prev_char = chars[i - 1] if i > 0 else ""
+            next_char = chars[i + 1] if i + 1 < len(chars) else ""
+            if prev_char.isalnum() and next_char.isalnum():
+                chars.insert(i, "\\")
+                i += 2
+                continue
+        i += 1
+    return "".join(chars)
+
+
 def parse_translation_response(
     raw: str,
     expected_ids: list[int],
@@ -404,25 +442,67 @@ def parse_translation_response(
     results: dict[int, str] = {}
     expected_set = set(expected_ids)
 
-    raw_fixed = raw.replace('```json', '').replace('```', '').strip()
+    raw_fixed = (
+        raw.replace("```json", "")
+        .replace("```", "")
+        .strip()
+    )
 
     try:
         data = json.loads(raw_fixed)
-        if 'type' in data:
-            data = data['properties']
     except (json.JSONDecodeError, TypeError):
-        return results
+        repaired = _repair_translation_json(raw_fixed)
+        try:
+            data = json.loads(repaired)
+        except (json.JSONDecodeError, TypeError):
+            return results
 
     if isinstance(data, dict):
-        if "translations" in data:
-            for item in data["translations"]:
-                _ingest(item, expected_set, results)
-        elif "id" in data and "question" in data:
-            _ingest(data, expected_set, results)
-        elif "question" in data and len(expected_ids) == 1:
-            _ingest({"id": expected_ids[0], "question": data["question"]}, expected_set, results)
+        _parse_dict_response(data, expected_ids, expected_set, results)
+    elif isinstance(data, list):
+        _parse_list_response(data, expected_ids, expected_set, results)
 
     return results
+
+
+def _parse_dict_response(
+    data: dict,
+    expected_ids: list[int],
+    expected_set: set[int],
+    results: dict[int, str],
+) -> None:
+    if "translations" in data:
+        for item in data["translations"]:
+            _ingest(item, expected_set, results)
+    elif "id" in data and "question" in data:
+        _ingest(data, expected_set, results)
+    elif "question" in data and len(expected_ids) == 1:
+        _ingest(
+            {"id": expected_ids[0], "question": data["question"]},
+            expected_set,
+            results,
+        )
+
+
+def _parse_list_response(
+    data: list,
+    expected_ids: list[int],
+    expected_set: set[int],
+    results: dict[int, str],
+) -> None:
+    for idx, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
+        question = item.get("question")
+        if not isinstance(question, str):
+            continue
+        sid = item.get("id")
+        if isinstance(sid, int) and sid in expected_set:
+            results[sid] = question
+        elif idx < len(expected_ids):
+            sid = expected_ids[idx]
+            if sid not in results:
+                results[sid] = question
 
 
 def _ingest(
