@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-verbal-framework"
+version = "0.1.0"
+description = "Robustness evaluation framework for LLMs on Spanish verbal reasoning tasks with cross-lingual attacks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "UNMSM Smart Soft" },
+]
+keywords = [
+    "llm", "evaluation", "benchmark", "verbal-reasoning", "robustness",
+    "cross-lingual", "adversarial", "nlp", "spanish",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=1.30",
+    "anthropic>=0.39",
+]
+
+[project.urls]
+Homepage = "https://github.com/unmsm-smartsoft/llm-verbal-framework"
+Repository = "https://github.com/unmsm-smartsoft/llm-verbal-framework"
+Issues = "https://github.com/unmsm-smartsoft/llm-verbal-framework/issues"
+
+[tool.setuptools.package-dir]
+"llm_verbal_framework" = "framework/lib"
+"llm_verbal_framework.providers" = "framework/lib/providers"
+
+[tool.setuptools]
+packages = ["llm_verbal_framework", "llm_verbal_framework.providers"]
