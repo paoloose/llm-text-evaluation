@@ -49,6 +49,17 @@ class AttackType:
             result.append(char.lower())
         return "".join(result)
 
+    @property
+    def perturb_batch_size(self) -> int:
+        """Number of samples to send per ``perturb()`` call so that partial
+        progress can be persisted between calls.
+
+        The default of 1 is safe for non-batched perturbations.
+        Batched perturbations (e.g. ``CrossLingual``) override this to match
+        the underlying translation-model batch size.
+        """
+        return 1
+
     def perturb(self, samples: list[Sample]) -> list[Sample]:
         """Transform baseline samples into perturbed versions.
 
@@ -114,7 +125,7 @@ class CrossLingual(AttackType):
                 "environment variable or pass an explicit 'model'."
             )
         return OpencodeGo(
-            model="minimax-m2.7",
+            model="qwen3.6-plus",
             api_key=api_key,
             batch=3,
             temperature=0.0,
@@ -122,6 +133,10 @@ class CrossLingual(AttackType):
             retry_times=1,
             max_errors=1,
         )
+
+    @property
+    def perturb_batch_size(self) -> int:
+        return self._translation_model.batch_size
 
     async def perturb(self, samples: list[Sample]) -> list[Sample]:
         """Translate samples to the target language using an LLM.

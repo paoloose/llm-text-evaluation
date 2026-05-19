@@ -80,25 +80,41 @@ async def generate_perturbed_dataset(
             "Perturbation '%s/%s': %d cached, %d remaining",
             attack.attack_name, label, len(existing), len(remaining),
         )
-        try:
-            new_samples = await attack.perturb(remaining)
-        except Exception as exc:
-            log_error(
-                partial_dir,
-                session_id,
-                phase="perturbation",
-                error_type="translation_failed",
-                provider=getattr(getattr(attack, "model", None), "provider_name", ""),
-                model=getattr(getattr(attack, "model", None), "display_name", ""),
-                dataset=baseline.filename,
-                attack_type=attack.attack_name,
-                attack_label=attack.label or "",
-                sample_ids=[s.id for s in remaining],
-                exception=exc,
+        batch_size = attack.perturb_batch_size
+        total_remaining = len(remaining)
+        for batch_idx in range(0, total_remaining, batch_size):
+            batch = remaining[batch_idx: batch_idx + batch_size]
+            batch_num = batch_idx // batch_size + 1
+            total_batches = (total_remaining + batch_size - 1) // batch_size
+            logger.info(
+                "Perturbation batch %d/%d: %d samples %s",
+                batch_num, total_batches, len(batch),
+                [s.id for s in batch],
             )
-            raise
-        existing.extend(new_samples)
-        _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
+            try:
+                new_batch = await attack.perturb(batch)
+            except Exception as exc:
+                log_error(
+                    partial_dir,
+                    session_id,
+                    phase="perturbation",
+                    error_type="perturbation_batch_failed",
+                    provider=getattr(getattr(attack, "model", None), "provider_name", ""),
+                    model=getattr(getattr(attack, "model", None), "display_name", ""),
+                    dataset=baseline.filename,
+                    attack_type=attack.attack_name,
+                    attack_label=attack.label or "",
+                    batch_num=batch_num,
+                    sample_ids=[s.id for s in batch],
+                    exception=exc,
+                )
+                raise
+            existing.extend(new_batch)
+            _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
+            logger.info(
+                "Perturbation batch %d/%d: saved (%d/%d total)",
+                batch_num, total_batches, len(existing), len(baseline),
+            )
 
     source = f"{attack.attack_name}.{label}.json"
     ds = Dataset(samples=existing, source_file=source, attack=attack)

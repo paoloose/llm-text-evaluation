@@ -23,7 +23,7 @@ from .perturb import generate_perturbed_dataset
 from .prompt import build_messages, parse_batch_response, parse_single_response
 from .providers.base import BaseProvider
 from .report import BenchmarkResult, DatasetResult, ModelResult
-from .types import EvaluatedSample, ChoiceLogprobs
+from .types import EvaluatedSample, ChoiceLogprobs, TaskType
 
 logger = logging.getLogger("llm_verbal_framework")
 
@@ -179,10 +179,21 @@ class Benchmark:
         Executes all (model, dataset) combinations with concurrency control
         and partial result persistence.
 
+        On KeyboardInterrupt the method reconstructs a partial
+        ``BenchmarkResult`` from any analysis and perturbation files already
+        on disk so the caller can still produce a report.
+
         Returns:
             BenchmarkResult with all evaluation data.
         """
-        return asyncio.run(self._run_async())
+        try:
+            return asyncio.run(self._run_async())
+        except KeyboardInterrupt:
+            logger.warning(
+                "Benchmark interrupted by user — building partial result "
+                "from saved files"
+            )
+            return self._build_interrupted_result()
 
     async def _run_async(self) -> BenchmarkResult:
         """Async implementation of the benchmark pipeline."""
@@ -277,6 +288,101 @@ class Benchmark:
             is_finished=all_finished,
             baseline_file=self._baseline.filename,
             started_at=started_at,
+            finished_at=finished_at,
+            base_dir=self._base_dir,
+        )
+        result._compute_all_robustness()
+        return result
+
+    def _build_interrupted_result(self) -> BenchmarkResult:
+        """Reconstruct a partial ``BenchmarkResult`` from saved analysis files.
+
+        Scans ``{partial_dir}/analysis/`` for JSON partials, groups them by
+        model, and wraps them in ``DatasetResult`` / ``ModelResult`` objects.
+        The returned result has ``is_finished=False``.
+        """
+        started_at = datetime.now(timezone.utc).isoformat()
+        finished_at = datetime.now(timezone.utc).isoformat()
+
+        analysis_dir = self._partial_dir / "analysis"
+
+        # ── Build dataset_filename → attack mapping ────────────────────────
+        dataset_attack_map: dict[str, AttackType | None] = {}
+        dataset_attack_map[self._baseline.filename] = None
+        for attack in self._attacks:
+            if attack.load_from:
+                filename = Path(attack.load_from).name
+            else:
+                filename = f"{attack.attack_name}.{attack.label or 'default'}.json"
+            dataset_attack_map[filename] = attack
+
+        # ── Load partials grouped by (model_name, provider) ─────────────────
+        model_map: dict[tuple[str, str], dict[str, list[EvaluatedSample]]] = {}
+        earliest_started = started_at
+
+        if analysis_dir.exists():
+            for fpath in sorted(analysis_dir.glob("*.json")):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+                model_name = data.get("model") or ""
+                provider = data.get("provider") or ""
+                dataset_file = data.get("dataset_file") or ""
+                file_started = data.get("started_at") or ""
+
+                if file_started and file_started < earliest_started:
+                    earliest_started = file_started
+
+                key = (model_name, provider)
+                if key not in model_map:
+                    model_map[key] = {}
+                if dataset_file not in model_map[key]:
+                    model_map[key][dataset_file] = []
+
+                for item in data.get("results", []):
+                    try:
+                        model_map[key][dataset_file].append(
+                            EvaluatedSample(
+                                sample_id=item["sample_id"],
+                                task=TaskType(item["task"]),
+                                expected=item["expected"],
+                                predicted=item["predicted"],
+                                correct=item["correct"],
+                                raw_response=item.get("raw_response", ""),
+                                latency_ms=item.get("latency_ms", 0),
+                                batch_id=item.get("batch_id", 0),
+                                timestamp=item.get("timestamp", ""),
+                            )
+                        )
+                    except (KeyError, ValueError):
+                        continue
+
+        # ── Build ModelResult objects ───────────────────────────────────────
+        model_results: list[ModelResult] = []
+        for (model_name, provider), datasets in model_map.items():
+            model_result = ModelResult(model_name=model_name, provider=provider)
+            for dataset_file, sample_results in datasets.items():
+                attack = dataset_attack_map.get(dataset_file)
+                if attack is not None and attack not in self._attacks:
+                    continue
+                model_result.evaluated_datasets.append(
+                    DatasetResult(
+                        dataset_file=dataset_file,
+                        attack=attack,
+                        results=sample_results,
+                    )
+                )
+            if model_result.evaluated_datasets:
+                model_results.append(model_result)
+
+        result = BenchmarkResult(
+            models=model_results,
+            is_finished=False,
+            baseline_file=self._baseline.filename,
+            started_at=earliest_started,
             finished_at=finished_at,
             base_dir=self._base_dir,
         )
