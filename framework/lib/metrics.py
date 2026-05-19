@@ -18,7 +18,7 @@ class DatasetMetrics:
         correct: Number of correctly predicted samples.
         failed: Number of samples where parsing failed (predicted is None).
         accuracy: Overall accuracy (correct / total).
-        accuracy_by_task: Accuracy broken down by task type.
+        tasks: Per-task breakdown — ``{task_name: {correct, total, accuracy}}``.
         avg_latency_ms: Average prediction latency in milliseconds.
         total_time_s: Total wall-clock evaluation time in seconds.
     """
@@ -27,8 +27,7 @@ class DatasetMetrics:
     correct: int
     failed: int
     accuracy: float
-    accuracy_by_task: dict[str, float]
-    per_task_counts: dict[str, dict[str, int]]
+    tasks: dict[str, dict[str, float]]
     avg_latency_ms: float
     total_time_s: float
 
@@ -38,10 +37,10 @@ class DatasetMetrics:
             "correct": self.correct,
             "failed": self.failed,
             "accuracy": round(self.accuracy, 4),
-            "accuracy_by_task": {
-                k: round(v, 4) for k, v in self.accuracy_by_task.items()
+            "tasks": {
+                k: {sk: round(sv, 4) for sk, sv in v.items()}
+                for k, v in self.tasks.items()
             },
-            "per_task_counts": self.per_task_counts,
             "avg_latency_ms": round(self.avg_latency_ms, 2),
             "total_time_s": round(self.total_time_s, 2),
         }
@@ -98,8 +97,7 @@ def compute_accuracy(results: list[EvaluatedSample]) -> DatasetMetrics:
             correct=0,
             failed=0,
             accuracy=0.0,
-            accuracy_by_task={},
-            per_task_counts={},
+            tasks={},
             avg_latency_ms=0.0,
             total_time_s=0.0,
         )
@@ -108,7 +106,7 @@ def compute_accuracy(results: list[EvaluatedSample]) -> DatasetMetrics:
     correct = sum(1 for r in results if r.correct)
     failed = sum(1 for r in results if r.predicted is None)
 
-    # Per-task accuracy
+    # Per-task stats
     task_correct: dict[str, int] = defaultdict(int)
     task_total: dict[str, int] = defaultdict(int)
     for r in results:
@@ -116,13 +114,12 @@ def compute_accuracy(results: list[EvaluatedSample]) -> DatasetMetrics:
         if r.correct:
             task_correct[r.task.value] += 1
 
-    accuracy_by_task = {
-        task: task_correct[task] / task_total[task] if task_total[task] > 0 else 0.0
-        for task in task_total
-    }
-
-    per_task_counts = {
-        task: {"correct": task_correct.get(task, 0), "total": task_total[task]}
+    tasks = {
+        task: {
+            "correct": task_correct.get(task, 0),
+            "total": task_total[task],
+            "accuracy": task_correct.get(task, 0) / task_total[task] if task_total[task] > 0 else 0.0,
+        }
         for task in task_total
     }
 
@@ -136,8 +133,7 @@ def compute_accuracy(results: list[EvaluatedSample]) -> DatasetMetrics:
         correct=correct,
         failed=failed,
         accuracy=correct / total if total > 0 else 0.0,
-        accuracy_by_task=accuracy_by_task,
-        per_task_counts=per_task_counts,
+        tasks=tasks,
         avg_latency_ms=avg_latency,
         total_time_s=total_time,
     )

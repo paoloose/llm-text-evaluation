@@ -279,9 +279,9 @@ class Benchmark:
                         expected,
                         m.accuracy * 100,
                     )
-                    if m.accuracy_by_task:
+                    if m.tasks:
                         per_task = " ".join(
-                            f"{task}={acc:.0%}" for task, acc in sorted(m.accuracy_by_task.items())
+                            f"{task}={info['accuracy']:.0%}" for task, info in sorted(m.tasks.items())
                         )
                         logger.info("    per-task: %s", per_task)
 

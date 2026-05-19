@@ -22,7 +22,7 @@ Analyze each question carefully and select the BEST answer.
 
 TASK-SPECIFIC GUIDELINES:
 - Reading comprehension: Focus on what the text explicitly states or strongly implies.
-- Sentence ordering (plan de redacción): Find the logical sequence that creates a coherent, well-structured text.
+- Sentence ordering: Find the logical sequence that creates a coherent, well-structured text.
 - Sentence elimination: Identify the sentence that does NOT belong thematically or logically.
 - Verbal series: Identify the pattern connecting the words (synonyms, antonyms, categories, relationships).
 - Analogies: Match the underlying relationship between the given pair of concepts.

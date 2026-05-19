@@ -1,11 +1,11 @@
 """LLM Verbal Reasoning Evaluation Framework.
 
-A modular framework for evaluating LLM robustness on verbal reasoning tasks
+A modular framework for evaluating LLM robustness on verbal reasoning tasks.
 
 Usage::
 
     from pathlib import Path
-    from .lib import Benchmark, providers, attacks, CrossLingualLanguage
+    from llm_verbal_framework import Benchmark, providers, attacks, CrossLingualLanguage
 
     benchmark = Benchmark(
         baseline=Path("dataset.json"),
