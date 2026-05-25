@@ -70,7 +70,7 @@ class DatasetResult:
         """Short label used as a JSON key for this dataset (e.g. ``"french_base"``)."""
         if self.attack is None:
             return "baseline"
-        return self.attack.label or "default"
+        return self.attack.label or self.attack.attack_name
 
     def compute_robustness_against(
         self, baseline: DatasetResult
@@ -199,11 +199,20 @@ class BenchmarkResult:
                 self._save_json(str(path))
         elif suffix in (".md", ".txt"):
             self._save_report(str(path))
+        elif suffix == ".html":
+            self._save_html(str(path))
         else:
             if per_sample:
                 self._save_json_with_samples(str(path))
             else:
                 self._save_json(str(path))
+
+    def _save_html(self, path: str) -> None:
+        """Export as a self-contained interactive HTML report."""
+        from .report_html import build_html
+        html = build_html(self)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
 
     def _save_json(self, path: str) -> None:
         """Export as structured JSON."""
