@@ -7,6 +7,7 @@ perturbation strategy on-the-fly with progress persistence for resumption.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -82,39 +83,53 @@ async def generate_perturbed_dataset(
         )
         batch_size = attack.perturb_batch_size
         total_remaining = len(remaining)
-        for batch_idx in range(0, total_remaining, batch_size):
-            batch = remaining[batch_idx: batch_idx + batch_size]
-            batch_num = batch_idx // batch_size + 1
-            total_batches = (total_remaining + batch_size - 1) // batch_size
-            logger.info(
-                "Perturbation batch %d/%d: %d samples %s",
-                batch_num, total_batches, len(batch),
-                [s.id for s in batch],
-            )
-            try:
-                new_batch = await attack.perturb(batch)
-            except Exception as exc:
-                log_error(
-                    partial_dir,
-                    session_id,
-                    phase="perturbation",
-                    error_type="perturbation_batch_failed",
-                    provider=getattr(getattr(attack, "model", None), "provider_name", ""),
-                    model=getattr(getattr(attack, "model", None), "display_name", ""),
-                    dataset=baseline.filename,
-                    attack_type=attack.attack_name,
-                    attack_label=attack.label or "",
-                    batch_num=batch_num,
-                    sample_ids=[s.id for s in batch],
-                    exception=exc,
+        total_batches = (total_remaining + batch_size - 1) // batch_size
+        max_concurrency = getattr(attack, "perturb_concurrency", 1)
+        semaphore = asyncio.Semaphore(max_concurrency)
+        lock = asyncio.Lock()
+        batches = [
+            remaining[i: i + batch_size]
+            for i in range(0, total_remaining, batch_size)
+        ]
+
+        async def _process_batch(batch_num: int, batch: list[Sample]) -> None:
+            async with semaphore:
+                logger.info(
+                    "Perturbation batch %d/%d: %d samples %s",
+                    batch_num, total_batches, len(batch),
+                    [s.id for s in batch],
                 )
-                raise
-            existing.extend(new_batch)
-            _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
-            logger.info(
-                "Perturbation batch %d/%d: saved (%d/%d total)",
-                batch_num, total_batches, len(existing), len(baseline),
-            )
+                try:
+                    new_batch = await attack.perturb(batch)
+                except Exception as exc:
+                    log_error(
+                        partial_dir,
+                        session_id,
+                        phase="perturbation",
+                        error_type="perturbation_batch_failed",
+                        provider=getattr(getattr(attack, "model", None), "provider_name", ""),
+                        model=getattr(getattr(attack, "model", None), "display_name", ""),
+                        dataset=baseline.filename,
+                        attack_type=attack.attack_name,
+                        attack_label=attack.label or "",
+                        batch_num=batch_num,
+                        sample_ids=[s.id for s in batch],
+                        exception=exc,
+                    )
+                    raise
+                async with lock:
+                    existing.extend(new_batch)
+                    _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
+                logger.info(
+                    "Perturbation batch %d/%d: saved (%d/%d total)",
+                    batch_num, total_batches, len(existing), len(baseline),
+                )
+
+        tasks = [
+            _process_batch(idx + 1, batch)
+            for idx, batch in enumerate(batches)
+        ]
+        await asyncio.gather(*tasks)
 
     source = f"{attack.attack_name}.{label}.json"
     ds = Dataset(samples=existing, source_file=source, attack=attack)

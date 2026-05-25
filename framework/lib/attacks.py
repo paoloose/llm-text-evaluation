@@ -105,6 +105,8 @@ class CrossLingual(AttackType):
 
     language: "CrossLingualLanguage | None" = field(default=None)
     model: "BaseProvider | None" = field(default=None, repr=False, compare=False, hash=False)
+    perturb_concurrency: int = field(default=3)
+    api_semaphore: "asyncio.Semaphore | None" = field(default=None, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
         if self.language is None:
@@ -127,7 +129,7 @@ class CrossLingual(AttackType):
         return OpencodeGo(
             model="qwen3.6-plus",
             api_key=api_key,
-            batch=3,
+            batch=5,
             temperature=0.0,
             enforce_json=True,
             retry_times=1,
@@ -179,9 +181,15 @@ class CrossLingual(AttackType):
             for attempt in range(provider.retry_times + 1):
                 start = time.perf_counter()
                 try:
-                    raw_response, _, _, _ = await provider.complete(
-                        messages, response_format
-                    )
+                    if self.api_semaphore is not None:
+                        async with self.api_semaphore:
+                            raw_response, _, _, _ = await provider.complete(
+                                messages, response_format
+                            )
+                    else:
+                        raw_response, _, _, _ = await provider.complete(
+                            messages, response_format
+                        )
                 except Exception as exc:
                     logger.error(
                         "Translation batch %d attempt %d/%d failed: %s: %s",

@@ -209,15 +209,30 @@ class Benchmark:
 
         # -- Generate perturbed datasets asynchronously --
         self._attacked: list[Dataset] = []
+        api_semaphore = asyncio.Semaphore(3)
         for attack in self._attacks:
+            if hasattr(attack, "api_semaphore"):
+                object.__setattr__(attack, "api_semaphore", api_semaphore)
+
+        async def _perturb_one(attack: AttackType) -> Dataset:
             logger.info(
                 "Processing attack: %s (%s)", attack.attack_name, attack.label
             )
             ds = await generate_perturbed_dataset(
-                self._baseline, attack, self._partial_dir, started_at
+                self._baseline, attack, self._partial_dir, started_at,
             )
-            self._attacked.append(ds)
             logger.info("  Prepared: %d samples", len(ds))
+            return ds
+
+        if len(self._attacks) <= 1:
+            for attack in self._attacks:
+                ds = await _perturb_one(attack)
+                self._attacked.append(ds)
+        else:
+            results = await asyncio.gather(*[
+                _perturb_one(a) for a in self._attacks
+            ])
+            self._attacked.extend(results)
 
         if attacks_only:
             logger.info(
