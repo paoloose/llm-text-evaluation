@@ -9,7 +9,7 @@ benchmark = Benchmark(
     baseline=Path("dataset.json"),
     attacks=[
         attacks.CrossLingual(language=CrossLingualLanguage.FRENCH),
-        attacks.CrossLingual(language=CrossLingualLanguage.CHINESE),        attacks.CrossLingual("fr_mixed"),
+        attacks.CrossLingual(language=CrossLingualLanguage.CHINESE),
         attacks.Synonym("synonym_1"),
         attacks.Paraphrasing("paraphrasing_1"),
     ],
