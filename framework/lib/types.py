@@ -21,6 +21,7 @@ class TaskType(StrEnum):
 class CrossLingualLanguage(StrEnum):
     """Supported target languages for cross-lingual perturbation."""
 
+    ENGLISH = "english"
     FRENCH = "french"
     CHINESE = "chinese"
     ARABIC = "arabic"

@@ -410,6 +410,20 @@ Ordene las oraciones. I) La Revolución Francesa cambió Europa. II) Los filóso
 }
 
 _TRANSLATION_SYSTEM_PROMPTS: dict[CrossLingualLanguage, str] = {
+    CrossLingualLanguage.ENGLISH: """\
+Translate the user's question and options into English.\nTags:\n\
+- The "question" tag contains the full question. Do not stop until you find the closing tag: </question>. It has a length property, and your translated question should roughly have the same length.\n\
+- The "options" tag contains a list of human readable possible answers to the question. Translate them until closing tag: </options>.\n\
+\n\
+You MUST translate BOTH the question AND every option. Do NOT leave any option in the original language.\n\
+\n\
+OUTPUT FORMAT — return ONLY a JSON object with a single key:\n\
+  "translations": an array of objects, each with:\n\
+    "id":       the sample id (integer)\n\
+    "question": translated question text (string)\n\
+    "options":  translated answer options in original order (array of strings)\n\
+\n\
+Do NOT wrap the JSON in markdown code blocks. No extra text. Translate every word.""",
     CrossLingualLanguage.FRENCH: """\
 Traduisez la question et les options de l'utilisateur en français.\nBalises :\n\
 - La balise « question » contient la question complète. Ne vous arrêtez pas avant d'avoir trouvé la balise de fermeture : </question>. Elle possède une propriété de longueur, et votre question traduite devrait avoir approximativement la même longueur.\n\
