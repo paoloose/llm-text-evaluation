@@ -28,6 +28,7 @@ async def generate_perturbed_dataset(
     attack: AttackType,
     partial_dir: str | Path,
     session_id: str,
+    api_semaphore: "asyncio.Semaphore | None" = None,
 ) -> Dataset:
     """Produce a perturbed dataset from a baseline.
 
@@ -68,6 +69,15 @@ async def generate_perturbed_dataset(
     )
 
     existing = _load_perturbation_partial(perturb_path)
+    perturb_started_at: str | None = None
+    if perturb_path.exists():
+        try:
+            with open(perturb_path, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+            if isinstance(prev, dict):
+                perturb_started_at = prev.get("started_at")
+        except (json.JSONDecodeError, OSError):
+            pass
     existing_ids = {s.id for s in existing}
     remaining = [s for s in baseline.samples if s.id not in existing_ids]
 
@@ -100,7 +110,7 @@ async def generate_perturbed_dataset(
                     [s.id for s in batch],
                 )
                 try:
-                    new_batch = await attack.perturb(batch)
+                    new_batch = await attack.perturb(batch, api_semaphore=api_semaphore)
                 except Exception as exc:
                     log_error(
                         partial_dir,
@@ -119,7 +129,7 @@ async def generate_perturbed_dataset(
                     raise
                 async with lock:
                     existing.extend(new_batch)
-                    _save_perturbation_partial(perturb_path, attack, existing, len(baseline))
+                    _save_perturbation_partial(perturb_path, attack, existing, len(baseline), perturb_started_at=perturb_started_at)
                 logger.info(
                     "Perturbation batch %d/%d: saved (%d/%d total)",
                     batch_num, total_batches, len(existing), len(baseline),
@@ -234,24 +244,14 @@ def _save_perturbation_partial(
     attack: AttackType,
     samples: list[Sample],
     total_samples: int,
+    *,
+    perturb_started_at: str | None = None,
 ) -> None:
-    """Save perturbation progress atomically.
-
-    Preserves the original ``started_at`` timestamp from any existing partial
-    file to avoid resetting it on every incremental save.
-    """
+    """Save perturbation progress atomically."""
     os.makedirs(path.parent, exist_ok=True)
 
     now = datetime.now(timezone.utc).isoformat()
-    started_at = now
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                prev = json.load(f)
-            if isinstance(prev, dict):
-                started_at = prev.get("started_at", now)
-        except (json.JSONDecodeError, OSError):
-            pass
+    started_at = perturb_started_at or now
 
     data = {
         "attack_type": attack.attack_name,

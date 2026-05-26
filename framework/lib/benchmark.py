@@ -233,9 +233,6 @@ class Benchmark:
         # -- Set up attack API semaphore --
         self._attacked: list[Dataset] = []
         api_semaphore = asyncio.Semaphore(3)
-        for attack in self._attacks:
-            if hasattr(attack, "api_semaphore"):
-                object.__setattr__(attack, "api_semaphore", api_semaphore)
 
         use_interleaved = (
             analyze_while_attacking
@@ -254,6 +251,7 @@ class Benchmark:
             )
             ds = await generate_perturbed_dataset(
                 self._baseline, attack, self._partial_dir, started_at,
+                api_semaphore=api_semaphore,
             )
             logger.info("  Prepared: %d samples", len(ds))
             return ds
@@ -408,6 +406,7 @@ class Benchmark:
             try:
                 ds = await generate_perturbed_dataset(
                     self._baseline, attack, self._partial_dir, started_at,
+                    api_semaphore=api_semaphore,
                 )
                 logger.info("  Prepared: %d samples", len(ds))
                 attack_results[attack.label] = ds
@@ -721,10 +720,9 @@ class Benchmark:
 
         batch_counter = len(completed_ids) // max(provider.batch_size, 1)
 
-        for batch_idx, batch_samples in enumerate(batches):
-            if retry_state.aborted:
-                break
+        lock = asyncio.Lock()
 
+        async def _eval_batch(batch_idx: int, batch_samples: list) -> list[EvaluatedSample] | None:
             batch_id = batch_counter + batch_idx
             sample_ids = [s.id for s in batch_samples]
             logger.info("    Batch %d: Evaluating samples %s", batch_id, sample_ids)
@@ -733,31 +731,32 @@ class Benchmark:
                 provider, batch_samples, batch_id, semaphore, retry_state,
                 dataset.filename, started_at,
             )
-            if batch_results is None:
-                # All retries exhausted — no results to add or persist.
-                # The error was already logged inside _evaluate_batch.
-                continue
+            if batch_results is not None:
+                async with lock:
+                    all_results.extend(batch_results)
+                    correct = sum(1 for r in batch_results if r.correct)
+                    logger.info(
+                        "    Batch %d: Completed (%d/%d correct)",
+                        batch_id, correct, len(batch_samples),
+                    )
+                    save_partial_results(
+                        partial_dir=self._partial_dir,
+                        dataset_filename=dataset.filename,
+                        model_name=provider.display_name,
+                        model_slug=provider.model_slug,
+                        provider_name=provider.provider_name,
+                        label=model_label,
+                        results=all_results,
+                        total_samples=len(dataset),
+                        started_at=started_at,
+                    )
+            return batch_results
 
-            all_results.extend(batch_results)
-
-            correct = sum(1 for r in batch_results if r.correct)
-            logger.info(
-                "    Batch %d: Completed (%d/%d correct)",
-                batch_id, correct, len(batch_samples),
-            )
-
-            # Persist ONLY successfully evaluated samples
-            save_partial_results(
-                partial_dir=self._partial_dir,
-                dataset_filename=dataset.filename,
-                model_name=provider.display_name,
-                model_slug=provider.model_slug,
-                provider_name=provider.provider_name,
-                label=model_label,
-                results=all_results,
-                total_samples=len(dataset),
-                started_at=started_at,
-            )
+        eval_tasks = [
+            _eval_batch(idx, batch)
+            for idx, batch in enumerate(batches)
+        ]
+        await asyncio.gather(*eval_tasks)
 
         return DatasetResult(
             dataset_file=dataset.filename,
@@ -781,12 +780,9 @@ class Benchmark:
         retries were exhausted.
         """
         async with semaphore:
+            if retry_state.aborted:
+                return None
             messages, response_format = build_messages(samples)
-
-            logger.debug(
-                "    Batch %d: Response format:\n%s",
-                batch_id, json.dumps(response_format, ensure_ascii=False, indent=4),
-            )
 
             sample_ids = [s.id for s in samples]
 
